@@ -2,6 +2,7 @@ import streamlit as st
 import urllib.parse
 import requests
 import xml.etree.ElementTree as ET
+from datetime import datetime
 
 # ==========================================
 # 1. 페이지 기본 설정
@@ -35,7 +36,7 @@ def recommend_crops(slope, direction, forest_type):
     return crops
 
 # ==========================================
-# 3. 외부 웹사이트 링크 생성 함수 (대법원 URL 수정 완료)
+# 3. 외부 웹사이트 링크 생성 함수
 # ==========================================
 def get_naver_map_url(address):
     encoded_addr = urllib.parse.quote(address)
@@ -45,43 +46,78 @@ def get_eum_url():
     return "https://www.eum.go.kr"
 
 def get_court_auction_url():
-    # 외부 접속 차단을 방지하는 대법원 경매 공식 메인 액션 URL
     return "https://www.courteauction.go.kr/RetrieveMainInfo.act"
 
 # ==========================================
-# 4. 국토교통부 토지 실거래가 API 조회 함수
+# 4. 국토교통부 토지 실거래가 API (같은 읍/면/동 최근 6개월~1년 동적 추적)
 # ==========================================
-def get_real_trade_price(lawd_cd, deal_ym):
+def get_dong_real_trade_price(address, lawd_cd):
     raw_key = st.secrets.get("PUBLIC_DATA_API_KEY", "")
     if not raw_key:
-        return 65000
+        return 0, "API 키 없음"
     
-    url = f"http://apis.data.go.kr/1613000/RTMSDataSvcLandTrade/getRTMSDataSvcLandTrade?serviceKey={raw_key}&LAWD_CD={lawd_cd}&DEAL_YMD={deal_ym}"
+    # 주소에서 읍/면/동 추출 (예: 경기도 포천시 신북면 심곡리 -> 신북면)
+    addr_parts = address.split()
+    target_dong = ""
+    for part in addr_parts:
+        if part.endswith(('읍', '면', '동')):
+            target_dong = part
+            break
+            
+    api_key = urllib.parse.unquote(raw_key)
+    url = "http://apis.data.go.kr/1613000/RTMSDataSvcLandTrade/getRTMSDataSvcLandTrade"
     
-    try:
-        response = requests.get(url, timeout=3)
-        if response.status_code == 200:
-            root = ET.fromstring(response.content)
-            items = root.findall('.//item')
-            total_price_per_pyeong = 0
-            count = 0
-            
-            for item in items:
-                jimok = item.findtext('jimok', '')
-                if jimok in ['임', '전', '답', '잡']:
-                    price = int(item.findtext('dealAmount', '0').replace(',', '')) * 10000
-                    area = float(item.findtext('dealArea', '1'))
-                    pyeong = area / 3.3058
-                    if pyeong > 0:
-                        total_price_per_pyeong += (price / pyeong)
-                        count += 1
-            
-            if count > 0:
-                return int(total_price_per_pyeong / count)
-    except Exception:
-        pass
+    # 최근 6개월 년월 리스트 생성 (예: 202607, 202606, ...)
+    current_year = 2026
+    current_month = 7
+    ym_list = []
+    for i in range(6):
+        m = current_month - i
+        y = current_year
+        if m <= 0:
+            m += 12
+            y -= 1
+        ym_list.append(f"{y}{m:02d}")
         
-    return 65000
+    total_price_per_pyeong = 0
+    count = 0
+    
+    # 최근 달부터 순차 조회 (속도 방어 및 타임아웃 방지)
+    for deal_ym in ym_list:
+        params = {
+            'serviceKey': api_key,
+            'LAWD_CD': lawd_cd,
+            'DEAL_YMD': deal_ym
+        }
+        try:
+            response = requests.get(url, params=params, timeout=2)
+            if response.status_code == 200:
+                root = ET.fromstring(response.content)
+                items = root.findall('.//item')
+                
+                for item in items:
+                    umd_nm = item.findtext('umdNm', '')
+                    jimok = item.findtext('jimok', '')
+                    
+                    # 같은 읍/면/동이며 토지/임야 지목인 거래 데이터 추출
+                    if (target_dong in umd_nm or not target_dong) and jimok in ['임', '전', '답', '잡']:
+                        price = int(item.findtext('dealAmount', '0').replace(',', '')) * 10000
+                        area = float(item.findtext('dealArea', '1'))
+                        pyeong = area / 3.3058
+                        if pyeong > 0:
+                            total_price_per_pyeong += (price / pyeong)
+                            count += 1
+                
+                # 표본 데이터가 3건 이상 확보되면 조기 종료하여 빠른 응답 유지
+                if count >= 3:
+                    break
+        except Exception:
+            continue
+            
+    if count > 0:
+        return int(total_price_per_pyeong / count), f"최근 인근({target_dong}) {count}건 거래 평균"
+    else:
+        return 0, "최근 1년 내 주변 실거래 기록 없음"
 
 # ==========================================
 # 5. 경매 DB & 온비드 공매 API/Fallback 수집 함수
@@ -90,7 +126,6 @@ def fetch_all_auction_items(selected_regions, show_court, show_onbid):
     raw_key = st.secrets.get("PUBLIC_DATA_API_KEY", "")
     all_items = []
     
-    # A. 대법원 법원경매 데이터베이스
     if show_court:
         court_database = [
             {
@@ -126,7 +161,6 @@ def fetch_all_auction_items(selected_regions, show_court, show_onbid):
             if item['region'] in selected_regions:
                 all_items.append(item)
 
-    # B. 한국자산관리공사 온비드 공매 API 수집
     if show_onbid:
         api_fetched = False
         if raw_key:
@@ -234,7 +268,10 @@ if st.button("🔍 경매 · 공매 실시간 통합 검색 및 분석"):
             
             for item in items:
                 lawd_cd = LAWD_CODES.get(item['region'], "41650")
-                item['nearby_avg_pyeong_price'] = get_real_trade_price(lawd_cd, "202607")
+                # 인근 읍/면/동 단위 최근 실거래 추적
+                avg_price, note = get_dong_real_trade_price(item['address'], lawd_cd)
+                item['nearby_avg_pyeong_price'] = avg_price
+                item['trade_note'] = note
 
         filtered_items = []
         for item in items:
@@ -255,7 +292,16 @@ if st.button("🔍 경매 · 공매 실시간 통합 검색 및 분석"):
                 pyeong_price = int(item['minimum_price'] / pyeong) if pyeong > 0 else 0
                 
                 nearby_price = item['nearby_avg_pyeong_price']
-                margin = int((1 - (pyeong_price / nearby_price)) * 100) if nearby_price > 0 else 0
+                trade_note = item['trade_note']
+                
+                if nearby_price > 0:
+                    margin = int((1 - (pyeong_price / nearby_price)) * 100)
+                    price_display = f"평당 {nearby_price:,}원"
+                    delta_display = f"{margin}% 저렴함"
+                else:
+                    margin = 0
+                    price_display = "조회불가"
+                    delta_display = "실거래 없음"
                 
                 eum_url = get_eum_url()
                 map_url = get_naver_map_url(item['address'])
@@ -288,18 +334,18 @@ if st.button("🔍 경매 · 공매 실시간 통합 검색 및 분석"):
                                 st.link_button("🌐 온비드사이트", "https://www.onbid.co.kr")
 
                     with col2:
-                        st.subheader("📊 주변 실거래 시세 (국토부 API)")
+                        st.subheader("📊 동 단위 인근 실거래 시세")
                         st.metric(
-                            label="해당 지역 최근 산지 평균 실거래가", 
-                            value=f"평당 {nearby_price:,}원"
+                            label=f"주변 실거래가 ({trade_note})", 
+                            value=price_display
                         )
                         st.metric(
                             label="현재 입찰 최저가 대비 안전마진", 
                             value=f"평당 {pyeong_price:,}원", 
-                            delta=f"{margin}% 저렴함"
+                            delta=delta_display
                         )
                         if margin >= 40:
-                            st.success("🔥 주변 시세 대비 초저평가 물건")
+                            st.success("🔥 인근 시세 대비 초저평가 물건")
 
                     with col3:
                         st.subheader("🌱 추천 재배 임산물")
