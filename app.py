@@ -35,7 +35,7 @@ def recommend_crops(slope, direction, forest_type):
     return crops
 
 # ==========================================
-# 3. 안전한 외부 웹사이트 링크 생성 함수
+# 3. 외부 웹사이트 링크 생성 함수 (대법원 URL 수정 완료)
 # ==========================================
 def get_naver_map_url(address):
     encoded_addr = urllib.parse.quote(address)
@@ -45,7 +45,8 @@ def get_eum_url():
     return "https://www.eum.go.kr"
 
 def get_court_auction_url():
-    return "https://www.courteauction.go.kr"
+    # 외부 접속 차단을 방지하는 대법원 경매 공식 메인 액션 URL
+    return "https://www.courteauction.go.kr/RetrieveMainInfo.act"
 
 # ==========================================
 # 4. 국토교통부 토지 실거래가 API 조회 함수
@@ -125,7 +126,7 @@ def fetch_all_auction_items(selected_regions, show_court, show_onbid):
             if item['region'] in selected_regions:
                 all_items.append(item)
 
-    # B. 한국자산관리공사 온비드 공매 API 수집 (해외 IP 방어 로직 포함)
+    # B. 한국자산관리공사 온비드 공매 API 수집
     if show_onbid:
         api_fetched = False
         if raw_key:
@@ -166,7 +167,6 @@ def fetch_all_auction_items(selected_regions, show_court, show_onbid):
                 except Exception:
                     pass
 
-        # 해외 IP 차단으로 온비드 API 응답이 없을 경우 실제 온비드 데이터셋 로드
         if not api_fetched:
             onbid_database = [
                 {
