@@ -46,9 +46,12 @@ def get_land_eum_url(address):
 # 4. 국토교통부 토지 실거래가 API 조회 함수
 # ==========================================
 def get_real_trade_price(lawd_cd, deal_ym):
-    api_key = st.secrets.get("PUBLIC_DATA_API_KEY", "")
-    if not api_key:
+    raw_key = st.secrets.get("PUBLIC_DATA_API_KEY", "")
+    if not raw_key:
         return 65000
+    
+    # 인증키 이중 인코딩 방지 처리
+    api_key = urllib.parse.unquote(raw_key)
     
     url = "http://openapi.molit.go.kr/OpenAPI_ToolInstallPackage/service/rest/RTMSOBJSvc/getRTMSDataSvcLandTrade"
     params = {
@@ -58,7 +61,7 @@ def get_real_trade_price(lawd_cd, deal_ym):
     }
     
     try:
-        response = requests.get(url, params=params, timeout=5)
+        response = requests.get(url, params=params, timeout=10)
         if response.status_code == 200:
             root = ET.fromstring(response.content)
             items = root.findall('.//item')
@@ -83,30 +86,34 @@ def get_real_trade_price(lawd_cd, deal_ym):
     return 65000
 
 # ==========================================
-# 5. 온비드 실시간 공매 물건 API 조회 함수
+# 5. 온비드 실시간 공매 물건 API 조회 함수 (인코딩 및 타임아웃 보정)
 # ==========================================
 def fetch_onbid_realtime_items(selected_regions):
-    api_key = st.secrets.get("PUBLIC_DATA_API_KEY", "")
-    if not api_key:
+    raw_key = st.secrets.get("PUBLIC_DATA_API_KEY", "")
+    if not raw_key:
         st.error("🔑 API 인증키가 설정되지 않았습니다. Streamlit Secrets를 확인해 주세요.")
         return []
         
-    url = "http://openapi.onbid.co.kr/openapi/services/KamcoPblclsUtrSvc/getKamcoPblclsList"
+    # 공공데이터포털 인증키 디코딩 (중복 인코딩 방지)
+    api_key = urllib.parse.unquote(raw_key)
     
+    url = "http://openapi.onbid.co.kr/openapi/services/KamcoPblclsUtrSvc/getKamcoPblclsList"
     fetched_items = []
     
     for region in selected_regions:
         params = {
             'serviceKey': api_key,
             'pageNo': '1',
-            'numOfRows': '10',
-            'DPSL_MTD_CD': '01',  # 01: 매각 물건
-            'CTGR_FIR_ID': '10000',  # 토지 카테고리
-            'ADDR': region          # 검색 지역 (예: 포천시, 양평군 등)
+            'numOfRows': '20',
+            'DPSL_MTD_CD': '01',  # 매각
+            'CTGR_FIR_ID': '10000', # 토지
+            'ADDR': region
         }
         
         try:
-            response = requests.get(url, params=params, timeout=6)
+            # 타임아웃을 15초로 넉넉하게 연장
+            response = requests.get(url, params=params, timeout=15)
+            
             if response.status_code == 200:
                 root = ET.fromstring(response.content)
                 items = root.findall('.//item')
@@ -115,8 +122,8 @@ def fetch_onbid_realtime_items(selected_regions):
                     cltr_nm = item.findtext('CLTR_NM', '')
                     address = item.findtext('LDNM_ADRS', '')
                     
-                    # '임야' 또는 '산'이 포함된 토지물건 필터링
-                    if '임야' in cltr_nm or '산' in address:
+                    # 임야 및 산지 물건 필터링
+                    if '임야' in cltr_nm or '산' in address or '임야' in item.findtext('CTGR_HIR_NM', ''):
                         case_no = item.findtext('CLTR_NO', '온비드 공매물건')
                         appraisal_price = int(item.findtext('FEE_PAYS_AMT', '0') or 0)
                         minimum_price = int(item.findtext('MIN_BID_PRC', '0') or int(appraisal_price * 0.7))
@@ -138,8 +145,12 @@ def fetch_onbid_realtime_items(selected_regions):
                             "pension_eligible": True,
                             "description": cltr_nm
                         })
+            else:
+                st.warning(f"⚠️ {region} API 응답 에러 (상태 코드: {response.status_code})")
+        except requests.exceptions.Timeout:
+            st.warning(f"⏳ {region} 온비드 서버 응답 시간이 초과되었습니다. (잠시 후 다시 시도해 주세요)")
         except Exception as e:
-            st.warning(f"⚠️ {region} 온비드 API 조회 중 통신 지연이 발생했습니다.")
+            st.warning(f"⚠️ {region} API 통신 중 오류 발생: {e}")
             
     return fetched_items
 
@@ -151,10 +162,10 @@ st.sidebar.header("⚙️ 분석 및 필터 조건")
 selected_regions = st.sidebar.multiselect(
     "탐색 지역",
     ["포천시", "가평군", "양평군", "남양주시", "광주시", "춘천시", "홍천군"],
-    default=["포천시"]
+    default=["가평군"]
 )
 
-max_price = st.sidebar.slider("최저입찰가 상한 (만원)", 1000, 30000, 20000, 1000)
+max_price = st.sidebar.slider("최저입찰가 상한 (만원)", 1000, 50000, 30000, 1000)
 max_ratio = st.sidebar.slider("감정가 대비 최저가 비율 (%)", 30, 90, 70, 5)
 
 LAWD_CODES = {
@@ -163,7 +174,7 @@ LAWD_CODES = {
 }
 
 # ==========================================
-# 7. 메인 화면 및 실시간 API 데이터 분석 실행
+# 7. 메인 화면 및 실행 로직
 # ==========================================
 if st.button("🔍 온비드 실시간 공매 물건 조회 및 분석"):
     if not selected_regions:
@@ -172,13 +183,11 @@ if st.button("🔍 온비드 실시간 공매 물건 조회 및 분석"):
         with st.spinner("🌐 한국자산관리공사 온비드 서버에서 최신 공매 물건을 실시간 조회 중..."):
             items = fetch_onbid_realtime_items(selected_regions)
             
-            # 국토부 실거래가 데이터 연동
             current_ym = datetime.now().strftime("%Y%m")
             for item in items:
-                lawd_cd = LAWD_CODES.get(item['region'], "41650")
+                lawd_cd = LAWD_CODES.get(item['region'], "41820")
                 item['nearby_avg_pyeong_price'] = get_real_trade_price(lawd_cd, "202607")
 
-        # 필터링 로직 적용
         filtered_items = []
         for item in items:
             if item['minimum_price'] > (max_price * 10000):
@@ -189,7 +198,7 @@ if st.button("🔍 온비드 실시간 공매 물건 조회 및 분석"):
             filtered_items.append(item)
 
         if not filtered_items:
-            st.info(f"💡 현재 선택하신 지역({', '.join(selected_regions)})에 조건(상한가 {max_price:,}만원 이하)을 만족하는 온비드 실시간 공매 임야 물건이 없거나, API 동기화 중입니다.")
+            st.info(f"💡 현재 선택하신 지역({', '.join(selected_regions)})에 조건(상한가 {max_price:,}만원 이하)을 만족하는 진행 중인 온비드 공매 임야 물건이 없거나, API 키가 동기화 중입니다.")
         else:
             st.success(f"🎉 실시간 온비드 공매 물건 {len(filtered_items)}건을 성공적으로 불러왔습니다!")
             
