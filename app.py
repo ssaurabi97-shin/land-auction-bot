@@ -155,18 +155,23 @@ def fetch_mock_database():
     ]
 
 # ==========================================
-# 3. 사이드바 검색 필터
+# 3. 사이드바 검색 필터 (Form 적용: 버튼 클릭 시에만 검색 실행)
 # ==========================================
-st.sidebar.header("⚙️ 검색 & 분석 필터")
-selected_regions = st.sidebar.multiselect(
-    "탐색 지역 선택",
-    ["포천시", "가평군", "양평군", "남양주시", "광주시", "춘천시", "홍천군"],
-    default=["포천시", "가평군", "양평군", "남양주시"]
-)
+with st.sidebar.form(key="search_form"):
+    st.header("⚙️ 검색 & 분석 필터")
+    
+    selected_regions = st.multiselect(
+        "탐색 지역 선택",
+        ["포천시", "가평군", "양평군", "남양주시", "광주시", "춘천시", "홍천군"],
+        default=["포천시", "가평군", "양평군", "남양주시"]
+    )
 
-show_court = st.sidebar.checkbox("⚖️ 대법원 법원경매", value=True)
-show_onbid = st.sidebar.checkbox("🌐 온비드 공매", value=True)
-max_price = st.sidebar.slider("최저입찰가 상한 (만원)", 1000, 50000, 30000, 1000)
+    show_court = st.checkbox("⚖️ 대법원 법원경매", value=True)
+    show_onbid = st.checkbox("🌐 온비드 공매", value=True)
+    max_price = st.slider("최저입찰가 상한 (만원)", 1000, 50000, 30000, 1000)
+
+    # 검색 버튼 클릭 시에만 실행되도록 처리
+    search_submitted = st.form_submit_button("🔍 조건으로 검색 실행", type="primary", use_container_width=True)
 
 # ==========================================
 # 4. 데이터 가공 및 Master 데이터프레임
@@ -214,7 +219,7 @@ for item in raw_data:
 st.subheader("1️⃣ [스크리닝] 경매 · 공매 물건 요약 비교")
 
 if not processed_list:
-    st.warning("선택 조건에 해당하는 물건이 없습니다. 사이드바 필터를 조정해 주세요.")
+    st.warning("선택 조건에 해당하는 물건이 없습니다. 사이드바 조건을 조정한 후 [🔍 조건으로 검색 실행] 버튼을 눌러주세요.")
 else:
     df_master = pd.DataFrame(processed_list)
     
