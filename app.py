@@ -18,17 +18,18 @@ st.markdown("""
     <style>
     .block-container { padding-top: 1.2rem; padding-bottom: 2rem; }
     h1 { font-size: 1.7rem !important; font-weight: 700; color: #1E3A8A; }
-    h2 { font-size: 1.3rem !important; border-bottom: 2px solid #E5E7EB; padding-bottom: 0.3rem; }
+    h2 { font-size: 1.3rem !important; border-bottom: 2px solid #E5E7EB; padding-bottom: 0.3rem; margin-top: 1rem; }
     h3 { font-size: 1.05rem !important; font-weight: 600; }
     .stDataFrame { font-size: 11.5px !important; }
-    div[data-testid="stMetricValue"] { font-size: 1.15rem !important; font-weight: 700; }
-    div[data-testid="stMetricLabel"] { font-size: 0.8rem !important; color: #4B5563; }
+    div[data-testid="stMetricValue"] { font-size: 1.2rem !important; font-weight: 700; }
+    div[data-testid="stMetricLabel"] { font-size: 0.82rem !important; color: #4B5563; }
     .card-box {
         background-color: #F9FAFB;
         border: 1px solid #E5E7EB;
         border-radius: 8px;
-        padding: 12px;
-        margin-bottom: 10px;
+        padding: 14px;
+        margin-top: 8px;
+        margin-bottom: 12px;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -37,7 +38,7 @@ st.title("🌲 AI 임야 경·공매 & 귀산촌 종합 분석 플랫폼")
 st.caption("Screening ➔ Valuation ➔ Business Plan : 한 화면에서 끝내는 원스톱 임야 투자 분석기")
 
 # ==========================================
-# 2. 고도화 데이터 로직 & 백엔드 계산기
+# 2. 데이터 처리 및 백엔드 로직
 # ==========================================
 REGIONAL_AUCTION_RATIO = {
     "포천시": 0.62, "가평군": 0.60, "양평군": 0.65,
@@ -74,25 +75,22 @@ def evaluate_soil_and_crops(slope, direction, elevation, soil_type):
     """다드림 & 흙토람 데이터 연동 임산물 6차원 적지 분석"""
     crops = []
     if elevation >= 300 and direction in ['동향', '북동향', '북향']:
-        crops.append(("산양삼", 95, "고해발 음지/반음지 최적 지형"))
+        crops.append(("산양삼", 95, "고해발 음지/반음지 최적 지형 조건"))
     else:
-        crops.append(("산양삼", 70, "해발고도 보통"))
+        crops.append(("산양삼", 70, "해발고도 보통 지형"))
         
     if slope < 20 and direction in ['남향', '남동향', '남서향']:
-        crops.append(("두릅/엄나무", 92, "일조량 풍부 및 완경사 관리 용이"))
+        crops.append(("두릅/엄나무", 92, "풍부한 일조량 및 완경사 관리 용이"))
     else:
-        crops.append(("두릅/엄나무", 78, "경사 및 일조량 보통"))
+        crops.append(("두릅/엄나무", 78, "경사도 및 일조량 보통"))
         
     if soil_type in ['사양토', '양토']:
-        crops.append(("더덕/도라지", 88, "배수성 우수한 토성 보유"))
+        crops.append(("더덕/도라지", 88, "배수성 우수한 유기물 토성 보유"))
     else:
         crops.append(("표고버섯(자연재배)", 85, "습도 유지 유리한 토질"))
         
     return crops
 
-# ==========================================
-# 3. 데이터베이스 샘플 수집 함수
-# ==========================================
 def fetch_mock_database():
     return [
         {
@@ -133,7 +131,7 @@ def fetch_mock_database():
     ]
 
 # ==========================================
-# 4. 사이드바 검색 필터
+# 3. 사이드바 검색 필터
 # ==========================================
 st.sidebar.header("⚙️ 검색 & 분석 필터")
 selected_regions = st.sidebar.multiselect(
@@ -147,7 +145,7 @@ show_onbid = st.sidebar.checkbox("🌐 온비드 공매", value=True)
 max_price = st.sidebar.slider("최저입찰가 상한 (만원)", 1000, 50000, 30000, 1000)
 
 # ==========================================
-# 5. 메인 데이터 처리 및 Master 스크리닝
+# 4. 데이터 가공 및 Master 데이터프레임
 # ==========================================
 raw_data = fetch_mock_database()
 processed_list = []
@@ -161,17 +159,14 @@ for item in raw_data:
     pyeong = int(item['area_sqm'] / 3.3058)
     min_pyeong_p = int(item['minimum_price'] / pyeong) if pyeong > 0 else 0
     
-    # 시세 보정
     base_p = REGION_DEFAULTS.get(item['region'], 75000)
     slope_f = get_slop_factor(item['slope'])
     dir_f = get_direction_factor(item['direction'])
     adj_pyeong_p = int(base_p * slope_f * dir_f)
     
-    # 마진율 및 연금
     margin = int(((adj_pyeong_p - min_pyeong_p) / adj_pyeong_p) * 100) if adj_pyeong_p > 0 else 0
     pension_status, monthly_p = evaluate_forest_pension(item['forest_type'], item['slope'], item['appraisal_price'])
     
-    # 유사 낙찰가율
     auc_ratio = REGIONAL_AUCTION_RATIO.get(item['region'], 0.62)
     est_win_price = int(item['appraisal_price'] * auc_ratio)
 
@@ -183,8 +178,7 @@ for item in raw_data:
         "margin": margin,
         "pension_status": pension_status,
         "monthly_p": monthly_p,
-        "est_win_price": est_win_price,
-        "ratio": (item['minimum_price'] / item['appraisal_price']) * 100
+        "est_win_price": est_win_price
     }
     processed_list.append(item_dict)
 
@@ -198,7 +192,6 @@ if not processed_list:
 else:
     df_master = pd.DataFrame(processed_list)
     
-    # 스크리닝용 간결한 데이터프레임 구성
     df_display = pd.DataFrame({
         "유형": df_master['type'],
         "사건/물건번호": df_master['case_no'],
@@ -218,121 +211,142 @@ else:
     st.markdown("---")
 
     # ==========================================
-    # 물건 선택 영역 (Master-Detail 연동)
+    # 물건 선택 드롭다운 (Master-Detail 연동)
     # ==========================================
     case_options = [f"[{r['type']}] {r['case_no']} - {r['address']} (마진율: {r['margin']}%)" for r in processed_list]
-    selected_idx = st.selectbox("🔍 **상세 정밀 분석을 수행할 물건을 선택하세요:**", range(len(case_options)), format_func=lambda x: case_options[x])
+    selected_idx = st.selectbox("🔍 **상세 심층 분석을 수행할 물건을 선택하세요:**", range(len(case_options)), format_func=lambda x: case_options[x])
     
     target = processed_list[selected_idx]
 
     st.markdown(f"## 🎯 심층 분석 리포트: {target['case_no']} (`{target['address']}`)")
 
     # ==========================================
-    # [대분류 2 & 3] 심층 분석 (좌우 2컬럼 레이아웃)
+    # [대분류 2] 시세 및 입찰가 분석 (세로 전체 폭 배치)
     # ==========================================
-    col_left, col_right = st.columns(2)
+    st.subheader("2️⃣ [가치평가] 시세 및 입찰가 분석")
+    
+    # 지표 메트릭 (4개 카드로 전체 폭 분할)
+    v_col1, v_col2, v_col3, v_col4 = st.columns(4)
+    v_col1.metric("보정 실거래 시세", f"{target['adj_pyeong_p']:,.0f}원/평")
+    v_col2.metric("최저입찰가 (평당)", f"{target['min_pyeong_p']:,.0f}원/평")
+    v_col3.metric("인근 유사낙찰 시세", f"{int(target['est_win_price']/target['pyeong']):,.0f}원/평")
+    v_col4.metric("보정 안전마진율", f"{target['margin']}%", delta=f"{target['margin']}% 저평가")
 
-    # ------------------------------------------
-    # LEFT COLUMN: [대분류 2] 시세 및 입찰가 분석
-    # ------------------------------------------
-    with col_left:
-        st.subheader("2️⃣ [가치평가] 시세 및 입찰가 분석")
-        
-        # 2-1 & 2-2 시세 지표 메트릭
-        m_col1, m_col2, m_col3 = st.columns(3)
-        m_col1.metric("보정 실거래 시세", f"{target['adj_pyeong_p']:,.0f}원/평")
-        m_col2.metric("최저입찰가", f"{target['min_pyeong_p']:,.0f}원/평")
-        m_col3.metric("보정 안전마진율", f"{target['margin']}%", delta=f"{target['margin']}% 저평가")
+    st.markdown("<div class='card-box'>", unsafe_allow_html=True)
+    st.markdown("### 💡 AI 추천 3단계 입찰 전략")
+    
+    conservative_bid = int(target['minimum_price'] * 1.02)
+    optimal_bid = int(target['minimum_price'] * 1.08)
+    aggressive_bid = int(target['est_win_price'])
 
-        st.markdown("<div class='card-box'>", unsafe_allow_html=True)
-        st.markdown("### 💡 AI 추천 3단계 입찰 전략")
-        
-        conservative_bid = int(target['minimum_price'] * 1.02)
-        optimal_bid = int(target['minimum_price'] * 1.08)
-        aggressive_bid = int(target['est_win_price'])
+    bid_df = pd.DataFrame({
+        "전략 구분": ["보수적 입찰 (단독낙찰 노림)", "AI 추천 적정가 (낙찰 유력)", "공격적 입찰 (경쟁 과열 시)"],
+        "추천 입찰가": [f"{conservative_bid/10000:,.0f} 만원", f"{optimal_bid/10000:,.0f} 만원", f"{aggressive_bid/10000:,.0f} 만원"],
+        "감정가 대비 비율": [f"{bid_val / target['appraisal_price'] * 100:.1f}%" for bid_val in [conservative_bid, optimal_bid, aggressive_bid]],
+        "예상 안전마진율": [f"{int(((target['adj_pyeong_p'] - (bid_val/target['pyeong']))/target['adj_pyeong_p'])*100)}%" for bid_val in [conservative_bid, optimal_bid, aggressive_bid]],
+        "입찰 전략 해설": [
+            "최저가 수준 입찰로 안전성 최우선 (유찰 가능성 있음)",
+            "지역 낙찰가율 및 개별요인 보정 기반 낙찰 확률 최적화",
+            "입지 우수성 감안 시 경쟁을 뚫기 위한 최고한도 입찰가"
+        ]
+    })
+    st.table(bid_df)
+    st.markdown("</div>", unsafe_allow_html=True)
 
-        bid_df = pd.DataFrame({
-            "전략 구분": ["보수적 입찰 (단독낙찰 노림)", "AI 추천 적정가 (낙찰 유력)", "공격적 입찰 (경쟁 과열시)"],
-            "추천 입찰가": [f"{conservative_bid/10000:,.0f} 만원", f"{optimal_bid/10000:,.0f} 만원", f"{aggressive_bid/10000:,.0f} 만원"],
-            "감정가 대비": [f"{bid_val / target['appraisal_price'] * 100:.1f}%" for bid_val in [conservative_bid, optimal_bid, aggressive_bid]],
-            "예상 마진": [f"{int(((target['adj_pyeong_p'] - (bid_val/target['pyeong']))/target['adj_pyeong_p'])*100)}%" for bid_val in [conservative_bid, optimal_bid, aggressive_bid]]
-        })
-        st.table(bid_df)
-        st.markdown("</div>", unsafe_allow_html=True)
-
-        # 2-4. 필요 실투자금 계산기
-        with st.expander("💰 입찰 필요 소요 자금 & 예상 세금 계산기"):
+    # 2-4. 입찰 소요 자금 계산기 (전체 폭 넓게 활용)
+    with st.expander("💰 입찰 필요 소요 자금 & 예상 세금 산정 계산기"):
+        calc_col1, calc_col2 = st.columns(2)
+        with calc_col1:
             bid_price_input = st.number_input("입찰 예정 금액 입력 (원)", value=optimal_bid, step=1000000)
             deposit = int(target['minimum_price'] * 0.10)
-            acquisition_tax = int(bid_price_input * 0.046)  # 농지/임야 기본 취득세율 4.6% 반영
-            est_legal_fee = 1000000  # 법무사 및 제반 비용
+            acquisition_tax = int(bid_price_input * 0.046)  # 농지/임야 취득세 4.6%
+            est_legal_fee = 1000000  # 법무 제반비용
             total_required = bid_price_input + acquisition_tax + est_legal_fee
-            
+        
+        with calc_col2:
             st.write(f"- **입찰 보증금 (10%)**: `{deposit:,.0f} 원`")
             st.write(f"- **예상 취득세 (4.6%)**: `{acquisition_tax:,.0f} 원`")
             st.write(f"- **기타 제반 비용 (법무 등)**: `{est_legal_fee:,.0f} 원`")
-            st.markdown(f"👉 **총 필요 자금**: **`{total_required:,.0f} 원`**")
+            st.markdown(f"👉 **낙찰 시 총 필요 실투자금**: **`{total_required:,.0f} 원`**")
 
-    # ------------------------------------------
-    # RIGHT COLUMN: [대분류 3] 물건 경영 & 수익성
-    # ------------------------------------------
-    with col_right:
-        st.subheader("3️⃣ [수익화] 물건 경영 & 수익성 분석")
+    # 대분류 구분선
+    st.markdown("---")
 
-        # 3-1. 산지연금 분석
-        p_col1, p_col2 = st.columns(2)
-        p_col1.metric("산지연금 적합성", target['pension_status'])
-        p_col2.metric("예상 월 연금 수령액", f"{target['monthly_p']/10000:,.0f} 만원/월", help="산림청 사유림 매수 연금형 10년(120개월) 지급 기준")
+    # ==========================================
+    # [대분류 3] 물건 경영 & 수익성 분석 (세로 전체 폭 배치)
+    # ==========================================
+    st.subheader("3️⃣ [수익화] 물건 경영 & 수익성 분석")
 
-        # 3-2. 임산물 6차원 적지 분석
-        st.markdown("<div class='card-box'>", unsafe_allow_html=True)
-        st.markdown("### 🌿 다드림 & 흙토람 기반 추천 임산물 TOP 3")
-        
-        crop_results = evaluate_soil_and_crops(target['slope'], target['direction'], target['elevation'], target['soil_type'])
-        
-        for crop, score, reason in crop_results:
-            st.write(f"• **{crop}** (적합도: **{score}점**) ➔ _{reason}_")
+    # 수익화 핵심 메트릭
+    m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+    m_col1.metric("산지연금 적합도", target['pension_status'])
+    m_col2.metric("예상 월 연금액", f"{target['monthly_p']/10000:,.0f} 만원/월", help="10년(120개월) 지급 기준")
+    m_col3.metric("해발고도 / 경사", f"{target['elevation']}m / {target['slope']}°")
+    m_col4.metric("토성 / 배수등급", f"{target['soil_type']} / {target['drainage']}")
+
+    # 3-2. 임산물 적지 분석
+    st.markdown("<div class='card-box'>", unsafe_allow_html=True)
+    st.markdown("### 🌿 다드림 & 흙토람 기반 추천 임산물 TOP 3")
+    
+    crop_results = evaluate_soil_and_crops(target['slope'], target['direction'], target['elevation'], target['soil_type'])
+    
+    c_col1, c_col2, c_col3 = st.columns(3)
+    cols = [c_col1, c_col2, c_col3]
+    
+    for idx, (crop, score, reason) in enumerate(crop_results):
+        with cols[idx]:
+            st.markdown(f"#### {idx+1}. {crop} (`{score}점`)")
+            st.write(f"• **적합 사유**: {reason}")
+            st.caption(f"추천 지형: 해발 {target['elevation']}m / {target['direction']}")
             
-        st.caption(f"📍 토양 스펙: 토성({target['soil_type']}) | 배수({target['drainage']}) | 해발({target['elevation']}m)")
-        st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
-        # 3-3 & 3-4 개발 가능성 및 리스크 체크리스트 (Expander로 피로도 관리)
-        with st.expander("🏗️ 산지전용 / 개발 가능성 및 지자체 지원책"):
+    # 3-3 & 3-4. 상세 개발 가능성 및 귀산촌 지원책 (Expander)
+    exp_col1, exp_col2 = st.columns(2)
+    
+    with exp_col1:
+        with st.expander("🏗️ 산지전용 / 개발 가능성 및 규제 점검"):
             st.markdown("#### [산지전용 가능성 판정]")
             if target['slope'] < 25:
-                st.success(f"✅ 평균 경사도 {target['slope']}°로 산지전용 가능 기준(25° 미만) 충족")
-                st.write("• 산림경영관리사(6평 이하) 설치 가능")
-                st.write("• 농막 및 산채류 재배 단지 조성 적합")
+                st.success(f"✅ 평균 경사도 {target['slope']}°로 산지전용 허가 기준(25° 미만) 충족")
+                st.write("• **산림경영관리사(6평 이하)**: 설치 가능")
+                st.write("• **농막 및 약초/산채 재배지**: 즉시 조성 가능")
+                st.write("• **임도 개설**: 현황도로 연계 가능성 높음")
             else:
-                st.error(f"❌ 평균 경사도 {target['slope']}°로 25° 이상 구역 존재. 현장 정밀 측량 필요")
+                st.error(f"❌ 평균 경사도 {target['slope']}°로 25° 이상 경사지 포함. 현장 측량 필수")
 
-            st.markdown("---")
-            st.markdown(f"#### [{target['region']} 귀산촌 지원금 & 혜택]")
+    with exp_col2:
+        with st.expander(f"🎁 {target['region']} 귀산촌 지원책 & 혜택"):
             st.write("• **귀산촌 창업 자금**: 최대 **3억 원 융자** (연 1.5% 저리 금리)")
             st.write("• **주택 구입 자금**: 최대 **7,500만 원 융자** 지원")
-            st.write("• **임업직불금**: 조건 충족 시 ha당 **최대 200만 원/년** 지급")
+            st.write("• **임업직불금**: 조건 충족 시 ha당 **최대 200만 원/년** 지원")
+            st.write("• **산림경영 컨설팅**: 한국임업진흥원 전담 컨설턴트 무료 매칭")
 
-        with st.expander("🚨 실전 현장 분석 리스크 체크리스트 (커뮤니티 노하우)"):
-            st.write(f"1. **진입 도로 상태**: {target['road_status']}")
-            st.write("2. **분묘기지권 리스크**: 임야 내 분묘 존재 여부 현장 확인 필수")
-            st.write("3. **국유림 연접 여부**: 국유림 연접 시 산지연금 매수 승인 가산점 부여")
-            st.write("4. **임도 및 현황도로**: 지적도상 맹지라도 현황도로 활용 가능성 점검")
+    with st.expander("🚨 실전 현장 리스크 체크리스트 (커뮤니티 및 현장 실무 노하우)"):
+        chk1, chk2 = st.columns(2)
+        with chk1:
+            st.write(f"1. **진입 도로 확보**: {target['road_status']}")
+            st.write("2. **분묘기지권**: 임야 내 미등기 분묘 존재 여부 현장 탐문 필수")
+        with chk2:
+            st.write("3. **국유림 연접 여부**: 국유림 연접 시 산지연금 매수 순위 우대")
+            st.write("4. **경계 침범 및 입목 축적**: 인근 필지 경계 및 입목 피해 이력 점검")
 
     # ==========================================
-    # 6. 엑셀 다운로드 & 외부 링크
+    # 5. 하단 버튼 및 외부 링크
     # ==========================================
     st.markdown("---")
-    ex_col1, ex_col2 = st.columns([2, 1])
+    b_col1, b_col2 = st.columns([2, 1])
     
-    with ex_col1:
+    with b_col1:
         encoded_addr = urllib.parse.quote(target['address'])
-        st.markdown(f"🔗 **외부 지적 및 현장 바로가기**: [🗺️ 네이버지도 실보보기](https://map.naver.com/v5/search/{encoded_addr}) | [🌐 토지이음 규제확인](https://www.eum.go.kr)")
+        st.markdown(f"🔗 **외부 데이터 바로가기**: [🗺️ 네이버지도 실보보기](https://map.naver.com/v5/search/{encoded_addr}) | [🌐 토지이음 규제확인](https://www.eum.go.kr)")
     
-    with ex_col2:
+    with b_col2:
         csv_data = pd.DataFrame([target]).to_csv(index=False).encode('utf-8-sig')
         st.download_button(
-            label="📥 현재 선택 물건 종합 분석 리포트 다운로드 (CSV)",
+            label="📥 현재 물건 심층 분석 리포트 다운로드 (CSV)",
             data=csv_data,
             file_name=f"임야분석_{target['case_no'].replace(' ', '_')}.csv",
-            mime="text/csv"
+            mime="text/csv",
+            type="primary"
         )
