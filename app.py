@@ -21,7 +21,7 @@ st.markdown("""
     h2 { font-size: 1.3rem !important; border-bottom: 2px solid #E5E7EB; padding-bottom: 0.3rem; margin-top: 1rem; }
     h3 { font-size: 1.05rem !important; font-weight: 600; }
     .stDataFrame { font-size: 11.5px !important; }
-    div[data-testid="stMetricValue"] { font-size: 1.2rem !important; font-weight: 700; }
+    div[data-testid="stMetricValue"] { font-size: 1.15rem !important; font-weight: 700; }
     div[data-testid="stMetricLabel"] { font-size: 0.82rem !important; color: #4B5563; }
     .card-box {
         background-color: #F9FAFB;
@@ -38,8 +38,33 @@ st.title("🌲 AI 임야 경·공매 & 귀산촌 종합 분석 플랫폼")
 st.caption("Screening ➔ Valuation ➔ Business Plan : 한 화면에서 끝내는 원스톱 임야 투자 분석기")
 
 # ==========================================
-# 2. 데이터 처리 및 백엔드 로직
+# 2. 데이터 처리 및 백엔드 유틸리티 함수
 # ==========================================
+def fmt_price(total_price, pyeong):
+    """총가격과 평당가격을 동시에 보기 좋게 포맷팅해주는 유틸리티 함수"""
+    if not pyeong or pyeong <= 0:
+        return f"{total_price:,.0f}원"
+    
+    per_pyeong = int(total_price / pyeong)
+    
+    # 1. 총액 포맷팅 (억/만원 단위 처리)
+    if total_price >= 100000000:
+        uk = int(total_price // 100000000)
+        man = int((total_price % 100000000) // 10000)
+        total_str = f"{uk}억 {man:,.0f}만원" if man > 0 else f"{uk}억원"
+    elif total_price >= 10000:
+        total_str = f"{int(total_price // 10000):,.0f}만원"
+    else:
+        total_str = f"{total_price:,.0f}원"
+        
+    # 2. 평당가 포맷팅
+    if per_pyeong >= 10000:
+        p_str = f"평당 {per_pyeong / 10000:,.1f}만원"
+    else:
+        p_str = f"평당 {per_pyeong:,.0f}원"
+        
+    return f"{total_str} ({p_str})"
+
 REGIONAL_AUCTION_RATIO = {
     "포천시": 0.62, "가평군": 0.60, "양평군": 0.65,
     "남양주시": 0.68, "광주시": 0.67, "춘천시": 0.58, "홍천군": 0.55
@@ -162,6 +187,7 @@ for item in raw_data:
     slope_f = get_slop_factor(item['slope'])
     dir_f = get_direction_factor(item['direction'])
     adj_pyeong_p = int(base_p * slope_f * dir_f)
+    adj_total_p = adj_pyeong_p * pyeong
     
     margin = int(((adj_pyeong_p - min_pyeong_p) / adj_pyeong_p) * 100) if adj_pyeong_p > 0 else 0
     pension_status, monthly_p = evaluate_forest_pension(item['forest_type'], item['slope'], item['appraisal_price'])
@@ -174,6 +200,7 @@ for item in raw_data:
         "pyeong": pyeong,
         "min_pyeong_p": min_pyeong_p,
         "adj_pyeong_p": adj_pyeong_p,
+        "adj_total_p": adj_total_p,
         "margin": margin,
         "pension_status": pension_status,
         "monthly_p": monthly_p,
@@ -197,9 +224,9 @@ else:
         "소재지": df_master['address'],
         "면적": df_master['pyeong'].apply(lambda x: f"{x:,}평"),
         "경사/향": df_master.apply(lambda r: f"{r['slope']}° / {r['direction']}", axis=1),
-        "감정가": df_master['appraisal_price'].apply(lambda x: f"{x/10000:,.0f}만"),
-        "최저가": df_master['minimum_price'].apply(lambda x: f"{x/10000:,.0f}만 ({x/df_master['appraisal_price'].iloc[0]*100:.0f}%)"),
-        "보정실거래가(평당)": df_master['adj_pyeong_p'].apply(lambda x: f"{x:,.0f}원"),
+        "감정가 (총액/평당)": df_master.apply(lambda r: fmt_price(r['appraisal_price'], r['pyeong']), axis=1),
+        "최저가 (총액/평당)": df_master.apply(lambda r: f"{fmt_price(r['minimum_price'], r['pyeong'])} ({r['minimum_price']/r['appraisal_price']*100:.0f}%)", axis=1),
+        "보정실거래 시세": df_master.apply(lambda r: fmt_price(r['adj_total_p'], r['pyeong']), axis=1),
         "보정안전마진": df_master['margin'].apply(lambda x: f"{x}%"),
         "산지연금 적합도": df_master['pension_status'],
         "도로/맹지 여부": df_master['road_status']
@@ -225,9 +252,9 @@ else:
     st.subheader("2️⃣ [가치평가] 시세 및 입찰가 분석")
     
     v_col1, v_col2, v_col3, v_col4 = st.columns(4)
-    v_col1.metric("보정 실거래 시세", f"{target['adj_pyeong_p']:,.0f}원/평")
-    v_col2.metric("최저입찰가 (평당)", f"{target['min_pyeong_p']:,.0f}원/평")
-    v_col3.metric("인근 유사낙찰 시세", f"{int(target['est_win_price']/target['pyeong']):,.0f}원/평")
+    v_col1.metric("보정 실거래 시세", fmt_price(target['adj_total_p'], target['pyeong']))
+    v_col2.metric("최저입찰가", fmt_price(target['minimum_price'], target['pyeong']))
+    v_col3.metric("인근 유사낙찰 시세", fmt_price(target['est_win_price'], target['pyeong']))
     v_col4.metric("보정 안전마진율", f"{target['margin']}%", delta=f"{target['margin']}% 저평가")
 
     st.markdown("<div class='card-box'>", unsafe_allow_html=True)
@@ -239,7 +266,7 @@ else:
 
     bid_df = pd.DataFrame({
         "전략 구분": ["보수적 입찰 (단독낙찰 노림)", "AI 추천 적정가 (낙찰 유력)", "공격적 입찰 (경쟁 과열 시)"],
-        "추천 입찰가": [f"{conservative_bid/10000:,.0f} 만원", f"{optimal_bid/10000:,.0f} 만원", f"{aggressive_bid/10000:,.0f} 만원"],
+        "추천 입찰가 (총액 / 평당가)": [fmt_price(bid_val, target['pyeong']) for bid_val in [conservative_bid, optimal_bid, aggressive_bid]],
         "감정가 대비 비율": [f"{bid_val / target['appraisal_price'] * 100:.1f}%" for bid_val in [conservative_bid, optimal_bid, aggressive_bid]],
         "예상 안전마진율": [f"{int(((target['adj_pyeong_p'] - (bid_val/target['pyeong']))/target['adj_pyeong_p'])*100)}%" for bid_val in [conservative_bid, optimal_bid, aggressive_bid]],
         "입찰 전략 해설": [
@@ -251,7 +278,7 @@ else:
     st.table(bid_df)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # 2-4. 개선된 입찰 소요 자금 계산기 (경매/공매 보증금 동적 계산 적용)
+    # 2-4. 입찰 소요 자금 계산기 (총액 + 평당가 표기 적용)
     with st.expander("💰 입찰 필요 소요 자금 & 예상 세금 산정 계산기"):
         calc_col1, calc_col2 = st.columns(2)
         with calc_col1:
@@ -261,6 +288,7 @@ else:
                 step=1000000,
                 help="금액을 입력/변경하시면 실시간으로 총 필요 자금과 공매 보증금이 자동 계산됩니다."
             )
+            st.caption(f"💡 입력 금액 환산: **{fmt_price(bid_price_input, target['pyeong'])}**")
             
             # 매각 유형별 보증금 자동 분기 로직
             if target['type'] == '법원경매':
@@ -277,11 +305,11 @@ else:
             total_required = bid_price_input + acquisition_tax + est_legal_fee
         
         with calc_col2:
-            st.write(f"- **{deposit_label}**: `{deposit:,.0f} 원`")
+            st.write(f"- **{deposit_label}**: `{fmt_price(deposit, target['pyeong'])}`")
             st.caption(deposit_note)
-            st.write(f"- **예상 취득세 (4.6%)**: `{acquisition_tax:,.0f} 원`")
-            st.write(f"- **기타 제반 비용 (법무 등)**: `{est_legal_fee:,.0f} 원`")
-            st.markdown(f"👉 **낙찰 시 총 필요 실투자금**: **`{total_required:,.0f} 원`**")
+            st.write(f"- **예상 취득세 (4.6%)**: `{fmt_price(acquisition_tax, target['pyeong'])}`")
+            st.write(f"- **기타 제반 비용 (법무 등)**: `{fmt_price(est_legal_fee, target['pyeong'])}`")
+            st.markdown(f"👉 **낙찰 시 총 필요 실투자금**: **`{fmt_price(total_required, target['pyeong'])}`**")
 
     # 대분류 구분선
     st.markdown("---")
