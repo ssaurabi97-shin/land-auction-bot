@@ -72,7 +72,6 @@ def evaluate_forest_pension(forest_type, slope, appraisal_price):
     return status, monthly_pension
 
 def evaluate_soil_and_crops(slope, direction, elevation, soil_type):
-    """다드림 & 흙토람 데이터 연동 임산물 6차원 적지 분석"""
     crops = []
     if elevation >= 300 and direction in ['동향', '북동향', '북향']:
         crops.append(("산양삼", 95, "고해발 음지/반음지 최적 지형 조건"))
@@ -211,7 +210,7 @@ else:
     st.markdown("---")
 
     # ==========================================
-    # 물건 선택 드롭다운 (Master-Detail 연동)
+    # 물건 선택 드롭다운
     # ==========================================
     case_options = [f"[{r['type']}] {r['case_no']} - {r['address']} (마진율: {r['margin']}%)" for r in processed_list]
     selected_idx = st.selectbox("🔍 **상세 심층 분석을 수행할 물건을 선택하세요:**", range(len(case_options)), format_func=lambda x: case_options[x])
@@ -221,11 +220,10 @@ else:
     st.markdown(f"## 🎯 심층 분석 리포트: {target['case_no']} (`{target['address']}`)")
 
     # ==========================================
-    # [대분류 2] 시세 및 입찰가 분석 (세로 전체 폭 배치)
+    # [대분류 2] 시세 및 입찰가 분석
     # ==========================================
     st.subheader("2️⃣ [가치평가] 시세 및 입찰가 분석")
     
-    # 지표 메트릭 (4개 카드로 전체 폭 분할)
     v_col1, v_col2, v_col3, v_col4 = st.columns(4)
     v_col1.metric("보정 실거래 시세", f"{target['adj_pyeong_p']:,.0f}원/평")
     v_col2.metric("최저입찰가 (평당)", f"{target['min_pyeong_p']:,.0f}원/평")
@@ -253,18 +251,34 @@ else:
     st.table(bid_df)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # 2-4. 입찰 소요 자금 계산기 (전체 폭 넓게 활용)
+    # 2-4. 개선된 입찰 소요 자금 계산기 (경매/공매 보증금 동적 계산 적용)
     with st.expander("💰 입찰 필요 소요 자금 & 예상 세금 산정 계산기"):
         calc_col1, calc_col2 = st.columns(2)
         with calc_col1:
-            bid_price_input = st.number_input("입찰 예정 금액 입력 (원)", value=optimal_bid, step=1000000)
-            deposit = int(target['minimum_price'] * 0.10)
-            acquisition_tax = int(bid_price_input * 0.046)  # 농지/임야 취득세 4.6%
-            est_legal_fee = 1000000  # 법무 제반비용
+            bid_price_input = st.number_input(
+                "입찰 예정 금액 입력 (원)", 
+                value=optimal_bid, 
+                step=1000000,
+                help="금액을 입력/변경하시면 실시간으로 총 필요 자금과 공매 보증금이 자동 계산됩니다."
+            )
+            
+            # 매각 유형별 보증금 자동 분기 로직
+            if target['type'] == '법원경매':
+                deposit = int(target['minimum_price'] * 0.10)
+                deposit_label = "입찰 보증금 (최저가의 10% 고정)"
+                deposit_note = "※ 법원경매는 입찰가와 관계없이 '최저매각가격의 10%'로 고정됩니다."
+            else:
+                deposit = int(bid_price_input * 0.10)
+                deposit_label = "입찰 보증금 (입찰예정가의 10%)"
+                deposit_note = "※ 온비드 공매는 '본인 입찰예정 금액의 10%'를 납부합니다."
+
+            acquisition_tax = int(bid_price_input * 0.046)  # 취득세 4.6%
+            est_legal_fee = 1000000  # 법무사 비용
             total_required = bid_price_input + acquisition_tax + est_legal_fee
         
         with calc_col2:
-            st.write(f"- **입찰 보증금 (10%)**: `{deposit:,.0f} 원`")
+            st.write(f"- **{deposit_label}**: `{deposit:,.0f} 원`")
+            st.caption(deposit_note)
             st.write(f"- **예상 취득세 (4.6%)**: `{acquisition_tax:,.0f} 원`")
             st.write(f"- **기타 제반 비용 (법무 등)**: `{est_legal_fee:,.0f} 원`")
             st.markdown(f"👉 **낙찰 시 총 필요 실투자금**: **`{total_required:,.0f} 원`**")
@@ -273,18 +287,16 @@ else:
     st.markdown("---")
 
     # ==========================================
-    # [대분류 3] 물건 경영 & 수익성 분석 (세로 전체 폭 배치)
+    # [대분류 3] 물건 경영 & 수익성 분석
     # ==========================================
     st.subheader("3️⃣ [수익화] 물건 경영 & 수익성 분석")
 
-    # 수익화 핵심 메트릭
     m_col1, m_col2, m_col3, m_col4 = st.columns(4)
     m_col1.metric("산지연금 적합도", target['pension_status'])
     m_col2.metric("예상 월 연금액", f"{target['monthly_p']/10000:,.0f} 만원/월", help="10년(120개월) 지급 기준")
     m_col3.metric("해발고도 / 경사", f"{target['elevation']}m / {target['slope']}°")
     m_col4.metric("토성 / 배수등급", f"{target['soil_type']} / {target['drainage']}")
 
-    # 3-2. 임산물 적지 분석
     st.markdown("<div class='card-box'>", unsafe_allow_html=True)
     st.markdown("### 🌿 다드림 & 흙토람 기반 추천 임산물 TOP 3")
     
@@ -301,7 +313,6 @@ else:
             
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # 3-3 & 3-4. 상세 개발 가능성 및 귀산촌 지원책 (Expander)
     exp_col1, exp_col2 = st.columns(2)
     
     with exp_col1:
