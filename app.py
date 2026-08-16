@@ -1,26 +1,31 @@
 import streamlit as st
-import pandas as pd
+import urllib.parse
 import requests
-from bs4 import BeautifulSoup
-import re
+import xml.etree.ElementTree as ET
+from datetime import datetime
+import pandas as pd
 
 # ==========================================
-# 1. 페이지 및 UI 기본 설정
+# 1. 페이지 및 CSS 설정 (원스톱 Dashboard UI)
 # ==========================================
 st.set_page_config(
-    page_title="농지 자경 및 농지연금 통합 분석기",
-    page_icon="🌾",
+    page_title="AI 임야 경·공매 & 귀산촌 통합 분석 플랫폼",
+    page_icon="🌲",
     layout="wide"
 )
 
 st.markdown("""
     <style>
     .block-container { padding-top: 1.2rem; padding-bottom: 2rem; }
-    h1 { font-size: 1.6rem !important; font-weight: 700; color: #15803D; }
-    h2 { font-size: 1.25rem !important; border-bottom: 2px solid #E5E7EB; padding-bottom: 0.3rem; margin-top: 1rem; }
+    h1 { font-size: 1.7rem !important; font-weight: 700; color: #1E3A8A; }
+    h2 { font-size: 1.3rem !important; border-bottom: 2px solid #E5E7EB; padding-bottom: 0.3rem; margin-top: 1rem; }
+    h3 { font-size: 1.05rem !important; font-weight: 600; }
+    .stDataFrame { font-size: 11.5px !important; }
+    div[data-testid="stMetricValue"] { font-size: 1.15rem !important; font-weight: 700; }
+    div[data-testid="stMetricLabel"] { font-size: 0.82rem !important; color: #4B5563; }
     .card-box {
-        background-color: #F0FDF4;
-        border: 1px solid #DCFCE7;
+        background-color: #F9FAFB;
+        border: 1px solid #E5E7EB;
         border-radius: 8px;
         padding: 14px;
         margin-top: 8px;
@@ -29,211 +34,363 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🌾 농지 자경(경영체 5년) & 농지연금 자동 탐색 플랫폼")
-st.caption("농지은행 실시간 웹 크롤링 ➔ 자경 5년 이력 구축 ➔ 60세 농지연금 극대화")
+st.title("🌲 AI 임야 경·공매 & 귀산촌 종합 분석 플랫폼")
+st.caption("Screening ➔ Valuation ➔ Business Plan : 한 화면에서 끝내는 원스톱 임야 투자 분석기")
 
 # ==========================================
-# 2. 백엔드: 농지은행 실시간 자동 스크래퍼
+# 2. 데이터 처리 및 백엔드 유틸리티 함수
 # ==========================================
-@st.cache_data(ttl=1800)  # 30분간 캐시 유지로 중복 요청 방지
-def scrape_fbo_lease_data(region_keyword):
-    """
-    농지은행(fbo.or.kr) 웹사이트의 검색 엔진을 직접 호출하여 
-    선택한 지역의 임대 물건('전')을 실시간으로 수집하는 크롤러
-    """
-    url = "https://www.fbo.or.kr/fbo/rent/list.do"  # 농지은행 임대 검색 엔드포인트
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
+def fmt_price(total_price, pyeong):
+    """총가격과 평당가격을 동시에 보기 좋게 포맷팅해주는 유틸리티 함수"""
+    if not pyeong or pyeong <= 0:
+        return f"{total_price:,.0f}원"
     
-    payload = {
-        "searchRegion": region_keyword,
-        "jimok": "전",  # 지목 '전' 전용
-        "pageIndex": 1
-    }
+    per_pyeong = int(total_price / pyeong)
     
-    items = []
-    try:
-        response = requests.post(url, data=payload, headers=headers, timeout=8)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
-            # 웹페이지 내 데이터 테이블 세열 추출 (농지은행 HTML 구조 기준)
-            rows = soup.select("table.tb_list tbody tr")
-            
-            for idx, row in enumerate(rows):
-                cols = row.find_all("td")
-                if len(cols) >= 5:
-                    addr = cols[1].get_text(strip=True)
-                    area_str = cols[2].get_text(strip=True) # 예: 1,320㎡
-                    rent_str = cols[3].get_text(strip=True) # 예: 600,000원
-                    contact = cols[4].get_text(strip=True)
-                    
-                    # 숫자 파싱
-                    area_m2 = int(re.sub(r'[^0-9]', '', area_str)) if re.sub(r'[^0-9]', '', area_str) else 0
-                    annual_rent = int(re.sub(r'[^0-9]', '', rent_str)) if re.sub(r'[^0-9]', '', rent_str) else 0
-                    
-                    items.append({
-                        "물건번호": f"FBO-{idx+1:03d}",
-                        "소재지": addr,
-                        "지목": "전",
-                        "면적_sqm": area_m2,
-                        "연임대료": annual_rent,
-                        "관할지사": contact
-                    })
-    except Exception as e:
-        st.error(f"농지은행 서버 연결 중 오류 발생: {e}")
-        
-    # 네트워크 응답이 없거나 구조가 바뀐 경우를 대비한 폴백(Fallback) 예시 처리
-    if not items:
-        items = [
-            {"물건번호": "FBO-001", "소재지": f"경기도 {region_keyword} 진접읍 팔야리 210", "지목": "전", "면적_sqm": 1320, "연임대료": 600000, "관할지사": f"{region_keyword} 지사 (1577-7770)"},
-            {"물건번호": "FBO-002", "소재지": f"경기도 {region_keyword} 소흘읍 직동리 145", "지목": "전", "면적_sqm": 1650, "연임대료": 750000, "관할지사": f"{region_keyword} 지사 (031-538-8100)"},
-            {"물건번호": "FBO-003", "소재지": f"경기도 {region_keyword} 청평면 상천리 88", "지목": "전", "면적_sqm": 850, "연임대료": 400000, "관할지사": f"{region_keyword} 지사 (031-580-1500)"}
-        ]
-    return items
-
-def fmt_price(total_price):
-    if not total_price or total_price <= 0:
-        return "0원"
+    # 1. 총액 포맷팅 (억/만원 단위 처리)
     if total_price >= 100000000:
         uk = int(total_price // 100000000)
         man = int((total_price % 100000000) // 10000)
-        return f"{uk}억 {man:,.0f}만원" if man > 0 else f"{uk}억원"
+        total_str = f"{uk}억 {man:,.0f}만원" if man > 0 else f"{uk}억원"
     elif total_price >= 10000:
-        return f"{int(total_price // 10000):,.0f}만원"
-    return f"{total_price:,.0f}원"
+        total_str = f"{int(total_price // 10000):,.0f}만원"
+    else:
+        total_str = f"{total_price:,.0f}원"
+        
+    # 2. 평당가 포맷팅
+    if per_pyeong >= 10000:
+        p_str = f"평당 {per_pyeong / 10000:,.1f}만원"
+    else:
+        p_str = f"평당 {per_pyeong:,.0f}원"
+        
+    return f"{total_str} ({p_str})"
+
+REGIONAL_AUCTION_RATIO = {
+    "포천시": 0.62, "가평군": 0.60, "양평군": 0.65,
+    "남양주시": 0.68, "광주시": 0.67, "춘천시": 0.58, "홍천군": 0.55
+}
+
+REGION_DEFAULTS = {
+    "포천시": 75000, "가평군": 85000, "양평군": 95000,
+    "남양주시": 125000, "광주시": 115000, "춘천시": 60000, "홍천군": 50000
+}
+
+def get_slop_factor(slope):
+    if slope < 15: return 1.10
+    elif 15 <= slope < 25: return 0.85
+    else: return 0.65
+
+def get_direction_factor(direction):
+    if direction in ['남향', '남동향', '남서향']: return 1.05
+    elif direction in ['동향', '서향']: return 1.00
+    else: return 0.90
+
+def evaluate_forest_pension(forest_type, slope, appraisal_price):
+    if slope < 20 and forest_type in ['준보전산지', '임업용산지']:
+        status = "🟢 가능 (우수)"
+    elif slope < 25 and forest_type in ['준보전산지', '임업용산지']:
+        status = "🟡 가능 (보통)"
+    else:
+        status = "🔴 검토 필요"
+        
+    monthly_pension = int((appraisal_price * 1.18) / 120)
+    return status, monthly_pension
+
+def evaluate_soil_and_crops(slope, direction, elevation, soil_type):
+    crops = []
+    if elevation >= 300 and direction in ['동향', '북동향', '북향']:
+        crops.append(("산양삼", 95, "고해발 음지/반음지 최적 지형 조건"))
+    else:
+        crops.append(("산양삼", 70, "해발고도 보통 지형"))
+        
+    if slope < 20 and direction in ['남향', '남동향', '남서향']:
+        crops.append(("두릅/엄나무", 92, "풍부한 일조량 및 완경사 관리 용이"))
+    else:
+        crops.append(("두릅/엄나무", 78, "경사도 및 일조량 보통"))
+        
+    if soil_type in ['사양토', '양토']:
+        crops.append(("더덕/도라지", 88, "배수성 우수한 유기물 토성 보유"))
+    else:
+        crops.append(("표고버섯(자연재배)", 85, "습도 유지 유리한 토질"))
+        
+    return crops
+
+def fetch_mock_database():
+    return [
+        {
+            "case_no": "2026타경 10482", "type": "법원경매", "region": "포천시", 
+            "address": "경기도 포천시 신북면 심곡리 산 15-2", "area_sqm": 8260, 
+            "appraisal_price": 180000000, "minimum_price": 88200000, 
+            "slope": 12, "direction": "남동향", "elevation": 280, "forest_type": "준보전산지",
+            "road_status": "🟢 접함 (4m 현황도로)", "soil_type": "사양토", "drainage": "양호"
+        },
+        {
+            "case_no": "2026타경 31104", "type": "법원경매", "region": "양평군", 
+            "address": "경기도 양평군 서종면 문호리 산 4-1", "area_sqm": 9900, 
+            "appraisal_price": 250000000, "minimum_price": 122500000, 
+            "slope": 13, "direction": "남서향", "elevation": 190, "forest_type": "준보전산지",
+            "road_status": "🟡 진입로 불분명 (맹지 리스크)", "soil_type": "양토", "drainage": "매우 양호"
+        },
+        {
+            "case_no": "2026타경 41208", "type": "법원경매", "region": "남양주시", 
+            "address": "경기도 남양주시 진접읍 팔야리 산 22", "area_sqm": 12000, 
+            "appraisal_price": 280000000, "minimum_price": 137200000, 
+            "slope": 10, "direction": "남향", "elevation": 150, "forest_type": "준보전산지",
+            "road_status": "🟢 접함 (지적도상 도로)", "soil_type": "사양토", "drainage": "양호"
+        },
+        {
+            "case_no": "온비드-2026-00381", "type": "온비드공매", "region": "포천시", 
+            "address": "경기도 포천시 소흘읍 직동리 산 45", "area_sqm": 6600, 
+            "appraisal_price": 140000000, "minimum_price": 70000000, 
+            "slope": 18, "direction": "동향", "elevation": 320, "forest_type": "임업용산지",
+            "road_status": "🟢 임도 연결", "soil_type": "식양토", "drainage": "보통"
+        },
+        {
+            "case_no": "온비드-2026-01294", "type": "온비드공매", "region": "가평군", 
+            "address": "경기도 가평군 청평면 상천리 산 12", "area_sqm": 11200, 
+            "appraisal_price": 210000000, "minimum_price": 105000000, 
+            "slope": 11, "direction": "남동향", "elevation": 240, "forest_type": "준보전산지",
+            "road_status": "🟢 접함 (포장도로)", "soil_type": "사양토", "drainage": "양호"
+        }
+    ]
 
 # ==========================================
-# 3. 사이드바 검색 및 자동 수집 설정
+# 3. 사이드바 검색 필터 (Form 적용: 버튼 클릭 시에만 검색 실행)
 # ==========================================
-with st.sidebar:
-    st.header("⚙️ 실시간 자동 탐색 조건")
-    selected_region = st.selectbox(
-        "탐색 대상 지역 선택",
-        ["남양주시", "포천시", "가평군", "양평군", "광주시"]
-    )
+with st.sidebar.form(key="search_form"):
+    st.header("⚙️ 검색 & 분석 필터")
     
-    st.markdown("---")
-    if st.button("🔄 농지은행 데이터 실시간 새로고침", type="primary", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
+    selected_regions = st.multiselect(
+        "탐색 지역 선택",
+        ["포천시", "가평군", "양평군", "남양주시", "광주시", "춘천시", "홍천군"],
+        default=["포천시", "가평군", "양평군", "남양주시"]
+    )
+
+    show_court = st.checkbox("⚖️ 대법원 법원경매", value=True)
+    show_onbid = st.checkbox("🌐 온비드 공매", value=True)
+    max_price = st.slider("최저입찰가 상한 (만원)", 1000, 50000, 30000, 1000)
+
+    # 검색 버튼 클릭 시에만 실행되도록 처리
+    search_submitted = st.form_submit_button("🔍 조건으로 검색 실행", type="primary", use_container_width=True)
 
 # ==========================================
-# 4. 메인 탭 구성을 통한 로드맵 분석
+# 4. 데이터 가공 및 Master 데이터프레임
 # ==========================================
-tab1, tab2 = st.tabs([
-    "🌱 [1단계] 농지은행 임대 자동 수집 & 자경분석", 
-    "⚖️ [2단계] 농지 경·공매 & 농지연금 플랜 (60세 연금 극대화)"
-])
+raw_data = fetch_mock_database()
+processed_list = []
 
-# ------------------------------------------
-# TAB 1: 농지은행 실시간 데이터 자동 탐색
-# ------------------------------------------
-with tab1:
-    st.subheader(f"🌱 [1단계] {selected_region} 지역 농지은행 임대물건 실시간 조회")
-    st.caption("프로그램이 농지은행 웹사이트를 실시간 스크래핑하여 지목 '전' 매물만 자동으로 필터링합니다.")
+for item in raw_data:
+    if item['region'] not in selected_regions: continue
+    if item['type'] == '법원경매' and not show_court: continue
+    if item['type'] == '온비드공매' and not show_onbid: continue
+    if item['minimum_price'] > (max_price * 10000): continue
 
-    # 스크래퍼 호출
-    with st.spinner(f"농지은행 서버에서 {selected_region} 임대 물건을 실시간 수집 중..."):
-        lease_data = scrape_fbo_lease_data(selected_region)
+    pyeong = int(item['area_sqm'] / 3.3058)
+    min_pyeong_p = int(item['minimum_price'] / pyeong) if pyeong > 0 else 0
+    
+    base_p = REGION_DEFAULTS.get(item['region'], 75000)
+    slope_f = get_slop_factor(item['slope'])
+    dir_f = get_direction_factor(item['direction'])
+    adj_pyeong_p = int(base_p * slope_f * dir_f)
+    adj_total_p = adj_pyeong_p * pyeong
+    
+    margin = int(((adj_pyeong_p - min_pyeong_p) / adj_pyeong_p) * 100) if adj_pyeong_p > 0 else 0
+    pension_status, monthly_p = evaluate_forest_pension(item['forest_type'], item['slope'], item['appraisal_price'])
+    
+    auc_ratio = REGIONAL_AUCTION_RATIO.get(item['region'], 0.62)
+    est_win_price = int(item['appraisal_price'] * auc_ratio)
 
-    df_lease = pd.DataFrame(lease_data)
-    df_lease['평수'] = (df_lease['면적_sqm'] / 3.3058).astype(int)
-    df_lease['경영체등록자격'] = df_lease['면적_sqm'].apply(lambda x: "🟢 가능 (1,000㎡ 이상)" if x >= 1000 else "🔴 불가능 (1,000㎡ 미만)")
-    df_lease['월임대료'] = (df_lease['연임대료'] / 12).astype(int)
+    item_dict = {
+        **item,
+        "pyeong": pyeong,
+        "min_pyeong_p": min_pyeong_p,
+        "adj_pyeong_p": adj_pyeong_p,
+        "adj_total_p": adj_total_p,
+        "margin": margin,
+        "pension_status": pension_status,
+        "monthly_p": monthly_p,
+        "est_win_price": est_win_price
+    }
+    processed_list.append(item_dict)
 
-    # UI 출력 표
+# ==========================================
+# [대분류 1] 경매 물건 요약 (Fast Screening)
+# ==========================================
+st.subheader("1️⃣ [스크리닝] 경매 · 공매 물건 요약 비교")
+
+if not processed_list:
+    st.warning("선택 조건에 해당하는 물건이 없습니다. 사이드바 조건을 조정한 후 [🔍 조건으로 검색 실행] 버튼을 눌러주세요.")
+else:
+    df_master = pd.DataFrame(processed_list)
+    
     df_display = pd.DataFrame({
-        "물건번호": df_lease['물건번호'],
-        "소재지 (지목: 전)": df_lease['소재지'],
-        "면적": df_lease.apply(lambda r: f"{r['평수']:,}평 ({r['면적_sqm']:,}㎡)", axis=1),
-        "연 임대료": df_lease['연임대료'].apply(fmt_price),
-        "월 임대 부담금": df_lease['월임대료'].apply(lambda x: f"월 {x/10000:,.1f}만원"),
-        "경영체 등록 요건": df_lease['경영체등록자격'],
-        "관할지사": df_lease['관할지사']
+        "유형": df_master['type'],
+        "사건/물건번호": df_master['case_no'],
+        "소재지": df_master['address'],
+        "면적": df_master['pyeong'].apply(lambda x: f"{x:,}평"),
+        "경사/향": df_master.apply(lambda r: f"{r['slope']}° / {r['direction']}", axis=1),
+        "감정가 (총액/평당)": df_master.apply(lambda r: fmt_price(r['appraisal_price'], r['pyeong']), axis=1),
+        "최저가 (총액/평당)": df_master.apply(lambda r: f"{fmt_price(r['minimum_price'], r['pyeong'])} ({r['minimum_price']/r['appraisal_price']*100:.0f}%)", axis=1),
+        "보정실거래 시세": df_master.apply(lambda r: fmt_price(r['adj_total_p'], r['pyeong']), axis=1),
+        "보정안전마진": df_master['margin'].apply(lambda x: f"{x}%"),
+        "산지연금 적합도": df_master['pension_status'],
+        "도로/맹지 여부": df_master['road_status']
     })
 
-    st.dataframe(df_display, use_container_width=True, height=220)
+    st.dataframe(df_display, use_container_width=True, height=200)
 
     st.markdown("---")
-    st.markdown("### 📋 임대 농지 자경 및 농업경영체 등록 검토")
-    
-    target_idx = st.selectbox(
-        "자경 요건을 분석할 농지를 선택하세요:",
-        range(len(df_lease)),
-        format_func=lambda x: f"{df_lease.iloc[x]['소재지']} ({df_lease.iloc[x]['평수']}평 / 연 {fmt_price(df_lease.iloc[x]['연임대료'])})"
-    )
-    
-    target = df_lease.iloc[target_idx]
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("임대 면적", f"{target['평수']:,} 평 ({target['면적_sqm']:,} ㎡)")
-    c2.metric("예상 월 임대 부담금", f"월 {target['월임대료']/10000:,.1f} 만원")
-    c3.metric("농업경영체 등록 조건", "🟢 충족" if target['면적_sqm'] >= 1000 else "🔴 불가능")
+    # ==========================================
+    # 물건 선택 드롭다운
+    # ==========================================
+    case_options = [f"[{r['type']}] {r['case_no']} - {r['address']} (마진율: {r['margin']}%)" for r in processed_list]
+    selected_idx = st.selectbox("🔍 **상세 심층 분석을 수행할 물건을 선택하세요:**", range(len(case_options)), format_func=lambda x: case_options[x])
+    
+    target = processed_list[selected_idx]
+
+    st.markdown(f"## 🎯 심층 분석 리포트: {target['case_no']} (`{target['address']}`)")
+
+    # ==========================================
+    # [대분류 2] 시세 및 입찰가 분석
+    # ==========================================
+    st.subheader("2️⃣ [가치평가] 시세 및 입찰가 분석")
+    
+    v_col1, v_col2, v_col3, v_col4 = st.columns(4)
+    v_col1.metric("보정 실거래 시세", fmt_price(target['adj_total_p'], target['pyeong']))
+    v_col2.metric("최저입찰가", fmt_price(target['minimum_price'], target['pyeong']))
+    v_col3.metric("인근 유사낙찰 시세", fmt_price(target['est_win_price'], target['pyeong']))
+    v_col4.metric("보정 안전마진율", f"{target['margin']}%", delta=f"{target['margin']}% 저평가")
 
     st.markdown("<div class='card-box'>", unsafe_allow_html=True)
-    st.markdown(f"#### 📝 `{target['소재지']}` 자경 실행 계획")
-    st.write(f"1. **경영체 등록 자격**: 면적 **{target['면적_sqm']:,}㎡**로 법정 최소 기준 1,000㎡(약 303평)를 **{'충족합니다.' if target['면적_sqm'] >= 1000 else '미달합니다.'}**")
-    st.write(f"2. **계약 체결 문의**: `{target['관할지사']}`로 직접 임대차 계약 문의 진행")
-    st.write("3. **주말 농업 경영**: 두릅, 엄나무, 다년생 유실수 등 재배 ➔ 농산물품질관리원에 **농업경영체 등록 후 5년 이력 보존**")
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("### 💡 AI 추천 3단계 입찰 전략")
+    
+    conservative_bid = int(target['minimum_price'] * 1.02)
+    optimal_bid = int(target['minimum_price'] * 1.08)
+    aggressive_bid = int(target['est_win_price'])
 
-
-# ------------------------------------------
-# TAB 2: 농지 경·공매 & 농지연금 분석
-# ------------------------------------------
-with tab2:
-    st.subheader("⚖️ [2단계] 만 60세 농지연금 극대화를 위한 경·공매 저가 낙찰 분석")
-    st.markdown("""
-    > **💡 핵심 목표**: 감정가 대비 **35~40% 수준(약 1.4억~1.6억 원)**으로 유찰된 농지를 낙찰받아, 
-    > 만 60세 도달 시 **감정가 90% 기준 높은 농지연금**을 수령하는 수익성 구조를 분석합니다.
-    """)
-
-    df_auc_raw = pd.DataFrame([
-        {"사건번호": "2026타경 12048", "구분": "법원경매", "소재지": f"경기도 {selected_region} 진접읍 팔야리 105-3 ('전')", "면적_sqm": 1320, "감정가": 360000000, "최저가": 141120000, "거리_km": 12.5},
-        {"사건번호": "온비드-2026-04102", "구분": "온비드공매", "소재지": f"경기도 {selected_region} 소흘읍 이동교리 412 ('전')", "면적_sqm": 1650, "감정가": 380000000, "최저가": 152000000, "거리_km": 21.0},
-        {"사건번호": "2026타경 50921", "구분": "법원경매", "소재지": f"경기도 {selected_region} 청평면 대성리 88 ('전')", "면적_sqm": 1050, "감정가": 320000000, "최저가": 128000000, "거리_km": 28.5}
-    ])
-
-    df_auc_raw['평수'] = (df_auc_raw['면적_sqm'] / 3.3058).astype(int)
-    df_auc_raw['연금인정가'] = (df_auc_raw['감정가'] * 0.90).astype(int)
-    df_auc_raw['예상월연금'] = df_auc_raw['연금인정가'].apply(lambda x: min(int((x / 100000000) * 360000), 3000000))
-
-    df_auc_disp = pd.DataFrame({
-        "구분": df_auc_raw['구분'],
-        "사건/물건번호": df_auc_raw['사건번호'],
-        "소재지": df_auc_raw['소재지'],
-        "면적": df_auc_raw['평수'].apply(lambda x: f"{x:,}평"),
-        "감정가": df_auc_raw['감정가'].apply(fmt_price),
-        "최저가 (낙찰 타겟)": df_auc_raw.apply(lambda r: f"{fmt_price(r['최저가'])} ({r['최저가']/r['감정가']*100:.0f}%)", axis=1),
-        "60세 연금 인정가 (90%)": df_auc_raw['연금인정가'].apply(fmt_price),
-        "예상 월 연금액": df_auc_raw['예상월연금'].apply(lambda x: f"월 약 {x/10000:,.0f}만원"),
-        "30km 법칙": df_auc_raw['거리_km'].apply(lambda x: "🟢 적합" if x <= 30 else "🔴 초과")
+    bid_df = pd.DataFrame({
+        "전략 구분": ["보수적 입찰 (단독낙찰 노림)", "AI 추천 적정가 (낙찰 유력)", "공격적 입찰 (경쟁 과열 시)"],
+        "추천 입찰가 (총액 / 평당가)": [fmt_price(bid_val, target['pyeong']) for bid_val in [conservative_bid, optimal_bid, aggressive_bid]],
+        "감정가 대비 비율": [f"{bid_val / target['appraisal_price'] * 100:.1f}%" for bid_val in [conservative_bid, optimal_bid, aggressive_bid]],
+        "예상 안전마진율": [f"{int(((target['adj_pyeong_p'] - (bid_val/target['pyeong']))/target['adj_pyeong_p'])*100)}%" for bid_val in [conservative_bid, optimal_bid, aggressive_bid]],
+        "입찰 전략 해설": [
+            "최저가 수준 입찰로 안전성 최우선 (유찰 가능성 있음)",
+            "지역 낙찰가율 및 개별요인 보정 기반 낙찰 확률 최적화",
+            "입지 우수성 감안 시 경쟁을 뚫기 위한 최고한도 입찰가"
+        ]
     })
+    st.table(bid_df)
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    st.dataframe(df_auc_disp, use_container_width=True, height=200)
+    # 2-4. 입찰 소요 자금 계산기 (총액 + 평당가 표기 적용)
+    with st.expander("💰 입찰 필요 소요 자금 & 예상 세금 산정 계산기"):
+        calc_col1, calc_col2 = st.columns(2)
+        with calc_col1:
+            bid_price_input = st.number_input(
+                "입찰 예정 금액 입력 (원)", 
+                value=optimal_bid, 
+                step=1000000,
+                help="금액을 입력/변경하시면 실시간으로 총 필요 자금과 공매 보증금이 자동 계산됩니다."
+            )
+            st.caption(f"💡 입력 금액 환산: **{fmt_price(bid_price_input, target['pyeong'])}**")
+            
+            # 매각 유형별 보증금 자동 분기 로직
+            if target['type'] == '법원경매':
+                deposit = int(target['minimum_price'] * 0.10)
+                deposit_label = "입찰 보증금 (최저가의 10% 고정)"
+                deposit_note = "※ 법원경매는 입찰가와 관계없이 '최저매각가격의 10%'로 고정됩니다."
+            else:
+                deposit = int(bid_price_input * 0.10)
+                deposit_label = "입찰 보증금 (입찰예정가의 10%)"
+                deposit_note = "※ 온비드 공매는 '본인 입찰예정 금액의 10%'를 납부합니다."
 
+            acquisition_tax = int(bid_price_input * 0.046)  # 취득세 4.6%
+            est_legal_fee = 1000000  # 법무사 비용
+            total_required = bid_price_input + acquisition_tax + est_legal_fee
+        
+        with calc_col2:
+            st.write(f"- **{deposit_label}**: `{fmt_price(deposit, target['pyeong'])}`")
+            st.caption(deposit_note)
+            st.write(f"- **예상 취득세 (4.6%)**: `{fmt_price(acquisition_tax, target['pyeong'])}`")
+            st.write(f"- **기타 제반 비용 (법무 등)**: `{fmt_price(est_legal_fee, target['pyeong'])}`")
+            st.markdown(f"👉 **낙찰 시 총 필요 실투자금**: **`{fmt_price(total_required, target['pyeong'])}`**")
+
+    # 대분류 구분선
     st.markdown("---")
-    auc_target_idx = st.selectbox(
-        "🔍 상세 수익성 및 입찰 예산을 산정할 농지를 선택하세요:",
-        range(len(df_auc_raw)),
-        format_func=lambda x: f"[{df_auc_raw.iloc[x]['구분']}] {df_auc_raw.iloc[x]['사건번호']} - {df_auc_raw.iloc[x]['소재지']}"
-    )
 
-    auc_target = df_auc_raw.iloc[auc_target_idx]
+    # ==========================================
+    # [대분류 3] 물건 경영 & 수익성 분석
+    # ==========================================
+    st.subheader("3️⃣ [수익화] 물건 경영 & 수익성 분석")
 
-    ac1, ac2, ac3, ac4 = st.columns(4)
-    ac1.metric("감정평가액", fmt_price(auc_target['감정가']))
-    ac2.metric("최저입찰가 (40%선)", fmt_price(auc_target['최저가']))
-    ac3.metric("농지연금 평가액 (90%)", fmt_price(auc_target['연금인정가']))
-    ac4.metric("60세 예상 월 연금 수령액", f"월 {auc_target['예상월연금']/10000:,.0f} 만원")
+    m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+    m_col1.metric("산지연금 적합도", target['pension_status'])
+    m_col2.metric("예상 월 연금액", f"{target['monthly_p']/10000:,.0f} 만원/월", help="10년(120개월) 지급 기준")
+    m_col3.metric("해발고도 / 경사", f"{target['elevation']}m / {target['slope']}°")
+    m_col4.metric("토성 / 배수등급", f"{target['soil_type']} / {target['drainage']}")
 
     st.markdown("<div class='card-box'>", unsafe_allow_html=True)
-    st.markdown("#### 💰 총 투자 예산 대비 연금 가치 평가")
-    bid_est = int(auc_target['최저가'] * 1.05)
-    total_required = bid_est + 35000000  # 취득세 + 기반시설비 약 3,500만원
-    st.write(f"• **예상 낙찰가 (최저가 대비 105%)**: `{fmt_price(bid_est)}`")
-    st.write(f"• **총 필요 예산 (낙찰가 + 기반시설/세금 3.5천)**: **`{fmt_price(total_required)}`**")
-    st.write(f"• **만 60세 농지연금 담보 인정액**: **`{fmt_price(auc_target['연금인정가'])}`**")
-    st.write(f"👉 **자산 가치 증대율**: 투입예산 대비 **`{int((auc_target['연금인정가'] / total_required) * 100)}%` 인정** (2억 원 이내 완결 플랜 적합)")
+    st.markdown("### 🌿 다드림 & 흙토람 기반 추천 임산물 TOP 3")
+    
+    crop_results = evaluate_soil_and_crops(target['slope'], target['direction'], target['elevation'], target['soil_type'])
+    
+    c_col1, c_col2, c_col3 = st.columns(3)
+    cols = [c_col1, c_col2, c_col3]
+    
+    for idx, (crop, score, reason) in enumerate(crop_results):
+        with cols[idx]:
+            st.markdown(f"#### {idx+1}. {crop} (`{score}점`)")
+            st.write(f"• **적합 사유**: {reason}")
+            st.caption(f"추천 지형: 해발 {target['elevation']}m / {target['direction']}")
+            
     st.markdown("</div>", unsafe_allow_html=True)
+
+    exp_col1, exp_col2 = st.columns(2)
+    
+    with exp_col1:
+        with st.expander("🏗️ 산지전용 / 개발 가능성 및 규제 점검"):
+            st.markdown("#### [산지전용 가능성 판정]")
+            if target['slope'] < 25:
+                st.success(f"✅ 평균 경사도 {target['slope']}°로 산지전용 허가 기준(25° 미만) 충족")
+                st.write("• **산림경영관리사(6평 이하)**: 설치 가능")
+                st.write("• **농막 및 약초/산채 재배지**: 즉시 조성 가능")
+                st.write("• **임도 개설**: 현황도로 연계 가능성 높음")
+            else:
+                st.error(f"❌ 평균 경사도 {target['slope']}°로 25° 이상 경사지 포함. 현장 측량 필수")
+
+    with exp_col2:
+        with st.expander(f"🎁 {target['region']} 귀산촌 지원책 & 혜택"):
+            st.write("• **귀산촌 창업 자금**: 최대 **3억 원 융자** (연 1.5% 저리 금리)")
+            st.write("• **주택 구입 자금**: 최대 **7,500만 원 융자** 지원")
+            st.write("• **임업직불금**: 조건 충족 시 ha당 **최대 200만 원/년** 지원")
+            st.write("• **산림경영 컨설팅**: 한국임업진흥원 전담 컨설턴트 무료 매칭")
+
+    with st.expander("🚨 실전 현장 리스크 체크리스트 (커뮤니티 및 현장 실무 노하우)"):
+        chk1, chk2 = st.columns(2)
+        with chk1:
+            st.write(f"1. **진입 도로 확보**: {target['road_status']}")
+            st.write("2. **분묘기지권**: 임야 내 미등기 분묘 존재 여부 현장 탐문 필수")
+        with chk2:
+            st.write("3. **국유림 연접 여부**: 국유림 연접 시 산지연금 매수 순위 우대")
+            st.write("4. **경계 침범 및 입목 축적**: 인근 필지 경계 및 입목 피해 이력 점검")
+
+    # ==========================================
+    # 5. 하단 버튼 및 외부 링크
+    # ==========================================
+    st.markdown("---")
+    b_col1, b_col2 = st.columns([2, 1])
+    
+    with b_col1:
+        encoded_addr = urllib.parse.quote(target['address'])
+        st.markdown(f"🔗 **외부 데이터 바로가기**: [🗺️ 네이버지도 실보보기](https://map.naver.com/v5/search/{encoded_addr}) | [🌐 토지이음 규제확인](https://www.eum.go.kr)")
+    
+    with b_col2:
+        csv_data = pd.DataFrame([target]).to_csv(index=False).encode('utf-8-sig')
+        st.download_button(
+            label="📥 현재 물건 심층 분석 리포트 다운로드 (CSV)",
+            data=csv_data,
+            file_name=f"임야분석_{target['case_no'].replace(' ', '_')}.csv",
+            mime="text/csv",
+            type="primary"
+        )
